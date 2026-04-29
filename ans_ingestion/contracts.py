@@ -9,6 +9,11 @@ class FileLister(Protocol):
         ...
 
 
+class SourceDirectoryLister(Protocol):
+    def list_directories(self) -> list[str]:
+        ...
+
+
 class FileFilter(Protocol):
     def is_allowed(self, filename: str) -> bool:
         ...

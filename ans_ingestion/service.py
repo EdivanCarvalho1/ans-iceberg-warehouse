@@ -4,12 +4,13 @@ import logging
 import posixpath
 import shutil
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import urljoin, urlparse, urlunparse
 from zipfile import ZipFile
 
 from config import IngestionConfig
-from contracts import Downloader, FileFilter, FileLister, StorageClient
+from contracts import Downloader, FileFilter, FileLister, SourceDirectoryLister, StorageClient
 
 logger = logging.getLogger(__name__)
 
@@ -22,12 +23,16 @@ class IngestionService:
         file_filter: FileFilter,
         downloader: Downloader,
         storage_client: StorageClient,
+        source_directory_lister: SourceDirectoryLister | None = None,
+        file_lister_factory: Callable[[str], FileLister] | None = None,
     ) -> None:
         self.config = config
-        self.file_lister= file_lister
+        self.file_lister = file_lister
         self.file_filter = file_filter
         self.downloader = downloader
         self.storage_client = storage_client
+        self.source_directory_lister = source_directory_lister
+        self.file_lister_factory = file_lister_factory
 
     def run(self) -> None:
         logger.info("Iniciando ingestao")
@@ -36,10 +41,30 @@ class IngestionService:
 
         self.config.local_tmp_dir.mkdir(parents=True, exist_ok=True)
 
-        files = self.file_lister.list_files()
+        source_periods = self._list_source_periods()
+
+        for source_period in source_periods:
+            source_url = self._source_url_for_period(source_period)
+            destination_dir = self._destination_dir_for_period(source_period)
+
+            if source_period is not None and self.storage_client.exists(destination_dir):
+                logger.info("Competencia %s ja existe no destino; ignorando", source_period)
+                continue
+
+            self._run_source(source_url, destination_dir)
+
+        self._cleanup_tmp_dir()
+
+        logger.info("Processo finalizado")
+
+    def _run_source(self, source_url: str, destination_dir: str) -> None:
+        logger.info("Processando origem: %s", source_url)
+        logger.info("Destino da origem: %s", destination_dir)
+
+        files = self._list_files(source_url)
         allowed_files = self._filter_files(files)
-        staging_dir = self._run_sibling_hdfs_path(self.config.hdfs_destination_dir, "staging")
-        backup_dir = self._run_sibling_hdfs_path(self.config.hdfs_destination_dir, "backup")
+        staging_dir = self._run_sibling_hdfs_path(destination_dir, "staging")
+        backup_dir = self._run_sibling_hdfs_path(destination_dir, "backup")
 
         logger.info("Arquivos encontrados: %s", len(files))
         logger.info("Arquivos apos filtro: %s", len(allowed_files))
@@ -49,16 +74,39 @@ class IngestionService:
             self.storage_client.mkdir(staging_dir)
 
             for filename in allowed_files:
-                self._process_file(filename, staging_dir)
+                self._process_file(source_url, filename, staging_dir)
 
-            self._publish_staging_dir(staging_dir, self.config.hdfs_destination_dir, backup_dir)
+            self._publish_staging_dir(staging_dir, destination_dir, backup_dir)
         except Exception:
             self.storage_client.delete_path(staging_dir)
             raise
 
-        self._cleanup_tmp_dir()
+    def _list_source_periods(self) -> list[str | None]:
+        if self.source_directory_lister is None:
+            return [None]
 
-        logger.info("Processo finalizado")
+        periods = self.source_directory_lister.list_directories()
+        logger.info("Competencias encontradas: %s", len(periods))
+        return periods
+
+    def _list_files(self, source_url: str) -> list[str]:
+        if self.file_lister_factory is None:
+            return self.file_lister.list_files()
+
+        return self.file_lister_factory(source_url).list_files()
+
+    def _source_url_for_period(self, source_period: str | None) -> str:
+        if source_period is None:
+            return self.config.source_url
+
+        base_url = self.config.source_url.rstrip("/") + "/"
+        return urljoin(base_url, f"{source_period}/")
+
+    def _destination_dir_for_period(self, source_period: str | None) -> str:
+        if source_period is None:
+            return self.config.hdfs_destination_dir
+
+        return self._join_hdfs_path(self.config.hdfs_destination_dir, source_period)
 
     def _filter_files(self, files: list[str]) -> list[str]:
         allowed_files: list[str] = []
@@ -71,8 +119,8 @@ class IngestionService:
 
         return allowed_files
 
-    def _process_file(self, filename: str, hdfs_destination_root: str) -> None:
-        source_file_url = urljoin(self.config.source_url, filename)
+    def _process_file(self, source_url: str, filename: str, hdfs_destination_root: str) -> None:
+        source_file_url = urljoin(source_url, filename)
         local_file_path = self.config.local_tmp_dir / filename
         extract_dir = self.config.local_tmp_dir / local_file_path.stem
 

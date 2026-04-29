@@ -22,6 +22,14 @@ class StaticFileLister:
         return self.files
 
 
+class StaticDirectoryLister:
+    def __init__(self, directories: list[str]) -> None:
+        self.directories = directories
+
+    def list_directories(self) -> list[str]:
+        return self.directories
+
+
 class CopyingDownloader:
     def __init__(self, source_zip: Path) -> None:
         self.source_zip = source_zip
@@ -63,6 +71,19 @@ class MemoryStorageClient:
         self.uploaded.append((local_path.name, destination_dir))
 
 
+def make_config(tmp_path: Path, destination_dir: str = "hdfs://localhost:9000/dados/raw/ans/") -> IngestionConfig:
+    return IngestionConfig(
+        source_url="https://example.com/source/",
+        source_start_period="201904",
+        source_end_period=None,
+        hdfs_base_uri="hdfs://localhost:9000",
+        hdfs_web_url="http://localhost:9870",
+        hdfs_user=None,
+        hdfs_destination_dir=destination_dir,
+        local_tmp_dir=tmp_path / "work",
+    )
+
+
 class IngestionServiceTest(unittest.TestCase):
     def test_extract_zip_rejects_path_traversal(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -86,14 +107,7 @@ class IngestionServiceTest(unittest.TestCase):
             storage_client = MemoryStorageClient()
 
             service = IngestionService(
-                config=IngestionConfig(
-                    source_url="https://example.com/source/",
-                    hdfs_base_uri="hdfs://localhost:9000",
-                    hdfs_web_url="http://localhost:9870",
-                    hdfs_user=None,
-                    hdfs_destination_dir="hdfs://localhost:9000/dados/raw/ans/",
-                    local_tmp_dir=tmp_path / "work",
-                ),
+                config=make_config(tmp_path),
                 file_lister=StaticFileLister(["pda-024-icb-SP-2026_02.zip"]),
                 file_filter=AllowAllFilter(),
                 downloader=CopyingDownloader(zip_path),
@@ -115,14 +129,7 @@ class IngestionServiceTest(unittest.TestCase):
             storage_client.paths.add("hdfs://localhost:9000/dados/raw/ans/")
 
             service = IngestionService(
-                config=IngestionConfig(
-                    source_url="https://example.com/source/",
-                    hdfs_base_uri="hdfs://localhost:9000",
-                    hdfs_web_url="http://localhost:9870",
-                    hdfs_user=None,
-                    hdfs_destination_dir="hdfs://localhost:9000/dados/raw/ans/",
-                    local_tmp_dir=tmp_path / "work",
-                ),
+                config=make_config(tmp_path),
                 file_lister=StaticFileLister(["pda-024-icb-SP-2026_02.zip"]),
                 file_filter=AllowAllFilter(),
                 downloader=CopyingDownloader(zip_path),
@@ -150,14 +157,7 @@ class IngestionServiceTest(unittest.TestCase):
             storage_client.paths.add(destination_dir)
 
             service = IngestionService(
-                config=IngestionConfig(
-                    source_url="https://example.com/source/",
-                    hdfs_base_uri="hdfs://localhost:9000",
-                    hdfs_web_url="http://localhost:9870",
-                    hdfs_user=None,
-                    hdfs_destination_dir=destination_dir,
-                    local_tmp_dir=tmp_path / "work",
-                ),
+                config=make_config(tmp_path, destination_dir),
                 file_lister=StaticFileLister(["pda-024-icb-SP-2026_02.zip"]),
                 file_filter=AllowAllFilter(),
                 downloader=FailingDownloader(),
@@ -169,3 +169,57 @@ class IngestionServiceTest(unittest.TestCase):
 
             self.assertTrue(storage_client.exists(destination_dir))
             self.assertEqual(storage_client.moved, [])
+
+    def test_run_processes_period_directories_into_partitioned_destinations(self) -> None:
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            zip_path = tmp_path / "input.zip"
+            with ZipFile(zip_path, "w") as zip_file:
+                zip_file.writestr("pda-024-icb-SP-2026_02.csv", "header\nvalue\n")
+
+            storage_client = MemoryStorageClient()
+            service = IngestionService(
+                config=make_config(tmp_path),
+                file_lister=StaticFileLister([]),
+                file_filter=AllowAllFilter(),
+                downloader=CopyingDownloader(zip_path),
+                storage_client=storage_client,
+                source_directory_lister=StaticDirectoryLister(["202601", "202602"]),
+                file_lister_factory=lambda source_url: StaticFileLister(
+                    [f"pda-024-icb-SP-{source_url.rstrip('/')[-4:]}_02.zip"]
+                ),
+            )
+
+            service.run()
+
+            published_destinations = {destination for _, destination in storage_client.moved}
+            self.assertIn("hdfs://localhost:9000/dados/raw/ans/202601", published_destinations)
+            self.assertIn("hdfs://localhost:9000/dados/raw/ans/202602", published_destinations)
+            self.assertEqual(len(storage_client.uploaded), 2)
+
+    def test_run_skips_period_when_destination_already_exists(self) -> None:
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            zip_path = tmp_path / "input.zip"
+            with ZipFile(zip_path, "w") as zip_file:
+                zip_file.writestr("pda-024-icb-SP-2026_02.csv", "header\nvalue\n")
+
+            storage_client = MemoryStorageClient()
+            storage_client.paths.add("hdfs://localhost:9000/dados/raw/ans/202601")
+
+            service = IngestionService(
+                config=make_config(tmp_path),
+                file_lister=StaticFileLister([]),
+                file_filter=AllowAllFilter(),
+                downloader=CopyingDownloader(zip_path),
+                storage_client=storage_client,
+                source_directory_lister=StaticDirectoryLister(["202601", "202602"]),
+                file_lister_factory=lambda source_url: StaticFileLister(["pda-024-icb-SP-2026_02.zip"]),
+            )
+
+            service.run()
+
+            published_destinations = {destination for _, destination in storage_client.moved}
+            self.assertNotIn("hdfs://localhost:9000/dados/raw/ans/202601", published_destinations)
+            self.assertIn("hdfs://localhost:9000/dados/raw/ans/202602", published_destinations)
+            self.assertEqual(len(storage_client.uploaded), 1)
