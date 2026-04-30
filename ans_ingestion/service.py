@@ -87,7 +87,15 @@ class IngestionService:
 
         periods = self.source_directory_lister.list_directories()
         logger.info("Competencias encontradas: %s", len(periods))
-        return periods
+        selected_periods = self._select_latest_period(periods)
+        if selected_periods:
+            logger.info("Competencia mais recente selecionada: %s", selected_periods[0])
+
+        return selected_periods
+
+    @staticmethod
+    def _select_latest_period(periods: list[str]) -> list[str]:
+        return sorted(periods)[-1:]
 
     def _list_files(self, source_url: str) -> list[str]:
         if self.file_lister_factory is None:

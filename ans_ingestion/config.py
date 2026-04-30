@@ -39,9 +39,7 @@ class IngestionConfig:
             "https://dadosabertos.ans.gov.br/FTP/PDA/"
             "informacoes_consolidadas_de_beneficiarios-024/"
         )
-        source_start_period = IngestionConfig._empty_to_none(
-            os.getenv("ANS_SOURCE_START_PERIOD", "201904")
-        )
+        source_start_period = IngestionConfig._empty_to_none(os.getenv("ANS_SOURCE_START_PERIOD"))
         source_end_period = IngestionConfig._empty_to_none(os.getenv("ANS_SOURCE_END_PERIOD"))
 
         hdfs_destination_dir = os.getenv("ANS_HDFS_DIR")

@@ -14,22 +14,29 @@ A ingestão representa a primeira etapa do fluxo de dados: carregar os dados cru
 
 1. Lê configurações por variáveis de ambiente.
 2. Acessa automaticamente o diretório público da ANS.
-3. Lista os arquivos disponíveis no website.
-4. Filtra apenas arquivos `.zip` válidos.
-5. Ignora arquivos consolidados identificados pelo token `XX`.
-6. Baixa cada ZIP para uma área temporária local.
-7. Valida os caminhos internos do ZIP para evitar path traversal.
-8. Extrai os arquivos do pacote.
-9. Envia os arquivos extraídos para uma área de staging no HDFS.
-10. Publica os dados no destino final somente após a carga completa.
-11. Remove arquivos temporários locais ao final do processamento.
+3. Lista as competências disponíveis no formato `YYYYMM`.
+4. Seleciona apenas a competência mais recente disponível.
+5. Ignora competências que já existem no destino final do HDFS.
+6. Lista os arquivos disponíveis no website para cada competência nova.
+7. Filtra apenas arquivos `.zip` válidos.
+8. Ignora arquivos consolidados identificados pelo token `XX`.
+9. Baixa cada ZIP para uma área temporária local.
+10. Valida os caminhos internos do ZIP para evitar path traversal.
+11. Extrai os arquivos do pacote.
+12. Envia os arquivos extraídos para uma área de staging no HDFS.
+13. Publica os dados da competência no destino final somente após a carga completa.
+14. Remove arquivos temporários locais ao final do processamento.
 
 ## Arquitetura do fluxo
 
 ```text
 Website ANS
    |
-   | listagem + download dos ZIPs
+   | listagem de competencias YYYYMM
+   v
+Diretorios de competencia
+   |
+   | listagem + download dos ZIPs novos
    v
 Área temporária local
    |
@@ -40,7 +47,7 @@ HDFS staging
    | publicação controlada
    v
 HDFS raw zone
-/dados/raw/ans/
+/dados/raw/ans/YYYYMM/
 ```
 
 ## Boas práticas aplicadas
@@ -66,9 +73,13 @@ As principais configurações são definidas por variáveis de ambiente, evitand
 
 ### Publicação com staging
 
-Antes de publicar no destino final, os arquivos são enviados para um diretório temporário de staging no HDFS. A troca para o destino final acontece somente após a ingestão ser concluída com sucesso.
+Antes de publicar cada competência no destino final, os arquivos são enviados para um diretório temporário de staging no HDFS. A troca para o destino final acontece somente após a ingestão da competência ser concluída com sucesso.
 
 Esse desenho reduz o risco de deixar a camada raw parcialmente carregada em caso de erro durante download, extração ou upload.
+
+### Execução incremental
+
+O pipeline publica a competência mais recente em um subdiretório próprio no HDFS, por exemplo `/dados/raw/ans/202602/`. Em uma nova execução, se esse subdiretório já existir, a competência é ignorada. Quando a ANS publicar uma nova competência no diretório raiz, o próximo agendamento do Airflow vai encontrá-la e baixar somente essa nova pasta.
 
 ### Backup e rollback simples
 
@@ -115,10 +126,14 @@ export HDFS_BASE_URI=hdfs://localhost:9000
 export HDFS_WEB_URL=http://localhost:9870
 export HDFS_USER=edivan
 
-export ANS_SOURCE_URL=https://dadosabertos.ans.gov.br/FTP/PDA/informacoes_consolidadas_de_beneficiarios-024/202602/
+export ANS_SOURCE_URL=https://dadosabertos.ans.gov.br/FTP/PDA/informacoes_consolidadas_de_beneficiarios-024/
+export ANS_SOURCE_START_PERIOD=
+export ANS_SOURCE_END_PERIOD=
 export ANS_HDFS_DIR=hdfs://localhost:9000/dados/raw/ans/
 export ANS_LOCAL_TMP_DIR=/tmp/ans
 export ANS_REQUEST_TIMEOUT_SECONDS=60
+export ANS_DOWNLOAD_RETRIES=3
+export ANS_DOWNLOAD_RETRY_BACKOFF_SECONDS=5
 export LOG_LEVEL=INFO
 ```
 
@@ -129,10 +144,14 @@ export LOG_LEVEL=INFO
 | `HDFS_BASE_URI` | URI base do HDFS, por exemplo `hdfs://localhost:9000`. |
 | `HDFS_WEB_URL` | URL do WebHDFS/NameNode HTTP, por exemplo `http://localhost:9870`. |
 | `HDFS_USER` | Usuário utilizado pelo cliente WebHDFS. |
-| `ANS_SOURCE_URL` | URL pública de origem dos arquivos da ANS. |
+| `ANS_SOURCE_URL` | URL raiz pública da ANS que contém os diretórios de competência `YYYYMM`. |
+| `ANS_SOURCE_START_PERIOD` | Competência inicial opcional que será considerada antes da seleção da mais recente, no formato `YYYYMM`. |
+| `ANS_SOURCE_END_PERIOD` | Competência final opcional considerada antes da seleção da mais recente, no formato `YYYYMM`. Quando vazio, considera até a última competência disponível. |
 | `ANS_HDFS_DIR` | Diretório final no HDFS onde os dados crus serão publicados. |
 | `ANS_LOCAL_TMP_DIR` | Diretório temporário local usado para download e extração. |
 | `ANS_REQUEST_TIMEOUT_SECONDS` | Timeout das requisições HTTP. |
+| `ANS_DOWNLOAD_RETRIES` | Número máximo de tentativas por arquivo baixado. |
+| `ANS_DOWNLOAD_RETRY_BACKOFF_SECONDS` | Espera base entre novas tentativas de download. |
 | `LOG_LEVEL` | Nível de log da aplicação. |
 
 Se `ANS_HDFS_DIR` não for definido, o destino padrão será:
@@ -188,10 +207,10 @@ main.ipynb
 ## Exemplo de destino no HDFS
 
 ```text
-/dados/raw/ans/
+/dados/raw/ans/202602/
 ```
 
-Essa pasta representa a camada de dados crus, que pode ser usada posteriormente como origem para transformações em camadas Bronze, Silver e Gold.
+Cada subpasta `YYYYMM` representa uma competência da camada de dados crus, que pode ser usada posteriormente como origem para transformações em camadas Bronze, Silver e Gold.
 
 ## Testes
 
