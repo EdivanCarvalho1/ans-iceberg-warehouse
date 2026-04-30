@@ -13,6 +13,7 @@ O projeto foi criado para execucao em ambiente Big Data com Hadoop HDFS, Spark, 
 ```text
 .
 ├── ans_ingestion/              # Pipeline Python de ingestao da ANS para HDFS raw
+├── img/                        # Diagramas e imagens da documentacao
 ├── pipeline_utils/             # Funcoes reutilizaveis para Spark, Iceberg e qualidade
 ├── load_bronze_layer.ipynb     # Notebook de carga da camada Bronze
 ├── load_silver_layer.ipynb     # Notebook de carga da camada Silver
@@ -67,6 +68,10 @@ Veja a documentacao detalhada em [`ans_ingestion/README.md`](ans_ingestion/READM
 ### `load_bronze_layer.ipynb`
 
 Notebook Spark que le os arquivos da camada raw e grava a tabela `bronze.beneficiarios` em Iceberg.
+
+![Modelo da tabela bronze.beneficiarios](img/bronze-beneficiarios.drawio.png)
+
+A camada Bronze mantem os dados proximos ao formato original recebido da ANS. As colunas de negocio sao gravadas como `STRING`, evitando perda de informacao por inferencia automatica de tipos na primeira etapa do pipeline. Alem disso, a tabela recebe metadados tecnicos como `_source_path`, `_source_system`, `_batch_id`, `_ingested_at` e `_layer`, que permitem rastrear a origem de cada registro, controlar reprocessamentos e conectar a Bronze com as transformacoes posteriores da Silver.
 
 Principais responsabilidades:
 
