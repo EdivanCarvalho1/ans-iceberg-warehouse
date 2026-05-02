@@ -26,6 +26,6 @@ def add_silver_metadata(
     return (
         df
         .withColumn("_batch_id", F.lit(batch_id))
-        .withColumn("_silver_ingested_at", F.current_timestamp())
+        .withColumn("_ingested_at", F.current_timestamp())
         .withColumn("_layer", F.lit("silver"))
     )

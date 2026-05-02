@@ -48,13 +48,15 @@ def build_null_condition(required_columns: list[str]):
 
 
 def build_rejection_reason(required_columns: list[str]):
-    return F.concat_ws(
+    rejection_reason = F.concat_ws(
         "; ",
         *[
             F.when(F.col(column_name).isNull(), F.lit(f"{column_name} ausente"))
             for column_name in required_columns
         ]
     )
+
+    return F.when(rejection_reason != "", rejection_reason)
 
 
 def deduplicate_by_keys(
