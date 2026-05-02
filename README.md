@@ -87,6 +87,10 @@ Principais responsabilidades:
 
 Notebook Spark que transforma a Bronze em tabelas Silver.
 
+![Modelo das tabelas Silver ANS](img/silver-ans.drawio.png)
+
+A camada Silver separa a tabela Bronze em entidades mais limpas e reutilizaveis. `silver.beneficiario_movimento` preserva a granularidade do movimento por competencia e se relaciona com as tabelas de referencia `silver.operadora`, `silver.plano` e `silver.municipio`. Nessa etapa, campos numericos e datas passam a ter tipos apropriados, regras de qualidade sao aplicadas e registros invalidos seguem para `silver.beneficiario_rejeitado` com o motivo da rejeicao.
+
 Principais responsabilidades:
 
 - leitura da tabela `bronze.beneficiarios`;
