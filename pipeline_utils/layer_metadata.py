@@ -29,3 +29,15 @@ def add_silver_metadata(
         .withColumn("_ingested_at", F.current_timestamp())
         .withColumn("_layer", F.lit("silver"))
     )
+
+
+def add_gold_metadata(
+    df: DataFrame,
+    batch_id: str,
+) -> DataFrame:
+    return (
+        df
+        .withColumn("_batch_id", F.lit(batch_id))
+        .withColumn("_gold_ingested_at", F.current_timestamp())
+        .withColumn("_layer", F.lit("gold"))
+    )

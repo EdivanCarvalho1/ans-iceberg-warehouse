@@ -15,9 +15,9 @@ from pipeline_utils.iceberg_writes import (
     merge_iceberg_by_keys,
     replace_iceberg_by_partition_values,
 )
-from pipeline_utils.layer_metadata import add_bronze_metadata, add_silver_metadata
+from pipeline_utils.layer_metadata import add_bronze_metadata, add_gold_metadata, add_silver_metadata
 from pipeline_utils.pipeline_config import default_spark_local_dir, get_hdfs_base_uri, is_truthy
-from pipeline_utils.record_hash import add_record_hash
+from pipeline_utils.record_hash import add_hash_key, add_record_hash
 from pipeline_utils.silver_cleaning import (
     clean_string,
     clean_upper,
@@ -39,6 +39,8 @@ __all__ = [
     "NULL_TOKENS",
     "VALID_UFS",
     "add_bronze_metadata",
+    "add_gold_metadata",
+    "add_hash_key",
     "add_record_hash",
     "add_silver_metadata",
     "append_iceberg",

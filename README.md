@@ -5,6 +5,7 @@ Projeto de pipeline de dados para ingestao e tratamento dos dados publicos de be
 - **Raw**: arquivos extraidos da ANS publicados no HDFS.
 - **Bronze**: leitura dos CSVs crus, normalizacao tecnica e carga incremental em tabela Iceberg.
 - **Silver**: limpeza, validacao, deduplicacao e modelagem das entidades analiticas em tabelas Iceberg.
+- **Gold**: modelagem dimensional para consumo analitico e relatorios.
 
 O projeto foi criado para execucao em ambiente Big Data com Hadoop HDFS, Spark, Hive Metastore, Apache Iceberg e JupyterHub/JupyterLab.
 
@@ -17,6 +18,8 @@ O projeto foi criado para execucao em ambiente Big Data com Hadoop HDFS, Spark, 
 ├── pipeline_utils/             # Funcoes reutilizaveis para Spark, Iceberg e qualidade
 ├── load_bronze_layer.ipynb     # Notebook de carga da camada Bronze
 ├── load_silver_layer.ipynb     # Notebook de carga da camada Silver
+├── load_gold_layer.ipynb       # Notebook de carga da camada Gold
+├── beneficiarios_reports.ipynb # Consultas Spark SQL de relatorios da camada Gold
 ├── utils.py                    # Barrel module para importar utilitarios nos notebooks
 └── README.md
 ```
@@ -47,6 +50,19 @@ Iceberg: silver.operadora
          silver.plano
          silver.beneficiario_movimento
          silver.beneficiario_rejeitado
+        |
+        v
+load_gold_layer.ipynb
+        |
+        v
+Iceberg: gold.dim_operadora
+         gold.dim_municipio
+         gold.dim_plano
+         gold.dim_perfil_beneficiario
+         gold.fato_beneficiario_movimento
+        |
+        v
+beneficiarios_reports.ipynb
 ```
 
 ## Componentes principais
@@ -101,12 +117,32 @@ Principais responsabilidades:
 - separacao de registros rejeitados;
 - escrita nas tabelas Silver via merge ou substituicao por particao.
 
+### `load_gold_layer.ipynb`
+
+Notebook Spark que transforma a Silver em um modelo dimensional Gold para analises e relatorios.
+
+![Modelo das tabelas Gold ANS](img/gold-ans.drawio.png)
+
+A camada Gold organiza os movimentos de beneficiarios em uma tabela fato, `gold.fato_beneficiario_movimento`, ligada as dimensoes `gold.dim_operadora`, `gold.dim_municipio`, `gold.dim_plano` e `gold.dim_perfil_beneficiario`. Esse modelo facilita consultas por competencia, operadora, municipio, UF, plano, sexo, faixa etaria e tipo de vinculo, mantendo chaves substitutas e metadados de carga para rastreabilidade.
+
+Principais responsabilidades:
+
+- leitura das tabelas Silver do batch mais recente ou batch definido;
+- criacao de chaves substitutas para dimensoes e fato;
+- montagem das dimensoes de operadora, municipio, plano e perfil de beneficiario;
+- montagem da fato de movimento com medidas de ativos, aderidos e cancelados;
+- escrita em tabelas Iceberg Gold com merge ou substituicao por competencia.
+
+### `beneficiarios_reports.ipynb`
+
+Notebook Spark SQL com consultas de relatorio sobre a modelagem Gold, incluindo visoes por competencia, UF, operadora, perfil de beneficiario, tipo de vinculo, plano e municipio.
+
 ### `pipeline_utils/`
 
 Pacote de apoio usado pelos notebooks:
 
 - `dataframe_io.py`: leitura CSV, normalizacao de nomes e casts.
-- `layer_metadata.py`: metadados Bronze e Silver.
+- `layer_metadata.py`: metadados Bronze, Silver e Gold.
 - `record_hash.py`: hash tecnico de payload.
 - `iceberg_catalog.py`: criacao/validacao de namespaces Iceberg/Hive.
 - `iceberg_writes.py`: append, merge, replace por particao e filtro incremental.
@@ -200,6 +236,32 @@ silver.beneficiario_movimento
 silver.beneficiario_rejeitado
 ```
 
+### 4. Carregar a camada Gold
+
+Abra e execute:
+
+```text
+load_gold_layer.ipynb
+```
+
+Resultados esperados:
+
+```text
+gold.dim_operadora
+gold.dim_municipio
+gold.dim_plano
+gold.dim_perfil_beneficiario
+gold.fato_beneficiario_movimento
+```
+
+### 5. Executar relatorios
+
+Abra e execute:
+
+```text
+beneficiarios_reports.ipynb
+```
+
 ## Testes
 
 A suite de testes cobre principalmente a ingestao:
@@ -213,5 +275,6 @@ python -m unittest discover ans_ingestion/tests
 - A ingestao raw e incremental por competencia.
 - A Bronze evita reprocessar arquivos ja registrados por `_source_path`.
 - A Silver usa `_record_hash` para comparar alteracoes e preservar cargas idempotentes quando possivel.
+- A Gold usa modelagem dimensional para consultas analiticas e relatorios.
 - Configure `HDFS_BASE_URI` antes de executar os notebooks, pois os caminhos de warehouse, raw e checkpoint dependem dele.
 - Para reprocessamentos controlados, revise as variaveis e flags usadas diretamente nos notebooks antes da execucao.
