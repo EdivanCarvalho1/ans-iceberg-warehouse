@@ -13,7 +13,11 @@ WITH ranked_perfis AS (
         de_faixa_etaria_reaj,
         tipo_vinculo,
         ROW_NUMBER() OVER (
-            PARTITION BY tp_sexo, de_faixa_etaria, de_faixa_etaria_reaj, tipo_vinculo
+            PARTITION BY
+                tp_sexo,
+                de_faixa_etaria,
+                de_faixa_etaria_reaj,
+                tipo_vinculo
             ORDER BY SHA2(CONCAT_WS('||',
                 COALESCE(tp_sexo, '__NULL__'),
                 COALESCE(de_faixa_etaria, '__NULL__'),

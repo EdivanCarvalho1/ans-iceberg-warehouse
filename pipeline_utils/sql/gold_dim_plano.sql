@@ -14,7 +14,9 @@ WITH ranked_planos AS (
         de_abrg_geografica_plano,
         cobertura_assist_plan,
         ROW_NUMBER() OVER (
-            PARTITION BY cd_operadora, cd_plano
+            PARTITION BY
+                cd_operadora,
+                cd_plano
             ORDER BY SHA2(CONCAT_WS('||',
                 COALESCE(tp_vigencia_plano, '__NULL__'),
                 COALESCE(de_contratacao_plano, '__NULL__'),

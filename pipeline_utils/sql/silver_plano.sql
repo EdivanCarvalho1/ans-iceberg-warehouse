@@ -9,7 +9,9 @@ WITH ranked_planos AS (
         de_abrg_geografica_plano,
         cobertura_assist_plan,
         ROW_NUMBER() OVER (
-            PARTITION BY cd_operadora, cd_plano
+            PARTITION BY
+                cd_operadora,
+                cd_plano
             ORDER BY dt_carga DESC NULLS LAST, business_row_hash DESC
         ) AS dedup_rank
     FROM vw_silver_validated

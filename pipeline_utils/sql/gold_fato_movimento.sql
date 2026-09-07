@@ -52,7 +52,12 @@ WITH joined_dimensions AS (
         qt_beneficiario_aderido,
         qt_beneficiario_cancelado,
         ROW_NUMBER() OVER (
-            PARTITION BY id_cmpt_movel, sk_operadora, sk_municipio, sk_plano, sk_perfil_beneficiario
+            PARTITION BY
+                id_cmpt_movel,
+                sk_operadora,
+                sk_municipio,
+                sk_plano,
+                sk_perfil_beneficiario
             ORDER BY dt_carga DESC NULLS LAST, fact_row_hash DESC
         ) AS dedup_rank
     FROM joined_dimensions
