@@ -33,10 +33,3 @@ def default_spark_local_dir() -> str:
             return candidate
 
     return "/tmp"
-
-
-def is_truthy(value: str | None) -> bool:
-    if value is None:
-        return False
-
-    return value.strip().lower() in {"1", "true", "t", "yes", "y", "sim", "s"}

@@ -1,0 +1,25 @@
+INSERT OVERWRITE spark_catalog.bronze.beneficiarios
+SELECT
+    CAST(id_cmpt_movel AS STRING) AS id_cmpt_movel,
+    CAST(cd_operadora AS STRING) AS cd_operadora,
+    CAST(nm_razao_social AS STRING) AS nm_razao_social,
+    CAST(nr_cnpj AS STRING) AS nr_cnpj,
+    CAST(modalidade_operadora AS STRING) AS modalidade_operadora,
+    CAST(sg_uf AS STRING) AS sg_uf,
+    CAST(cd_municipio AS STRING) AS cd_municipio,
+    CAST(nm_municipio AS STRING) AS nm_municipio,
+    CAST(tp_sexo AS STRING) AS tp_sexo,
+    CAST(de_faixa_etaria AS STRING) AS de_faixa_etaria,
+    CAST(de_faixa_etaria_reaj AS STRING) AS de_faixa_etaria_reaj,
+    CAST(cd_plano AS STRING) AS cd_plano,
+    CAST(tp_vigencia_plano AS STRING) AS tp_vigencia_plano,
+    CAST(de_contratacao_plano AS STRING) AS de_contratacao_plano,
+    CAST(de_segmentacao_plano AS STRING) AS de_segmentacao_plano,
+    CAST(de_abrg_geografica_plano AS STRING) AS de_abrg_geografica_plano,
+    CAST(cobertura_assist_plan AS STRING) AS cobertura_assist_plan,
+    CAST(tipo_vinculo AS STRING) AS tipo_vinculo,
+    CAST(qt_beneficiario_ativo AS STRING) AS qt_beneficiario_ativo,
+    CAST(qt_beneficiario_aderido AS STRING) AS qt_beneficiario_aderido,
+    CAST(qt_beneficiario_cancelado AS STRING) AS qt_beneficiario_cancelado,
+    CAST(dt_carga AS STRING) AS dt_carga
+FROM vw_raw_ans;

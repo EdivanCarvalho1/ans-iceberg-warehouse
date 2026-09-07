@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import re
+
 from pyspark.sql import SparkSession
 
-from pipeline_utils.pipeline_config import get_hdfs_base_uri
 
 
 def create_namespace(
@@ -37,6 +38,50 @@ def create_namespace(
     _assert_namespace_exists(spark, catalog, database)
 
 
+def validate_table_columns(
+    spark: SparkSession,
+    table_name: str,
+    expected_columns: tuple[str, ...] | list[str],
+) -> None:
+    rows = spark.sql(f"DESCRIBE {table_name}").collect()
+    actual_columns = {
+        str(row[0]).lower()
+        for row in rows
+        if row[0] and not str(row[0]).startswith("#")
+    }
+    missing_columns = sorted(set(expected_columns) - actual_columns)
+    if missing_columns:
+        raise ValueError(f"Colunas ausentes em {table_name}: {missing_columns}")
+
+
+def tag_current_snapshot(
+    spark: SparkSession,
+    table_name: str,
+    tag_name: str,
+) -> int | None:
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", tag_name):
+        raise ValueError(f"Nome de tag Iceberg inválido: {tag_name}")
+
+    snapshots = spark.sql(
+        f"""
+        SELECT snapshot_id
+        FROM {table_name}.snapshots
+        ORDER BY committed_at DESC
+        LIMIT 1
+        """
+    ).collect()
+    if not snapshots:
+        return None
+
+    snapshot_id = int(snapshots[0][0])
+    escaped_tag = tag_name.replace("`", "``")
+    spark.sql(
+        f"ALTER TABLE {table_name} CREATE OR REPLACE TAG `{escaped_tag}` "
+        f"AS OF VERSION {snapshot_id}"
+    )
+    return snapshot_id
+
+
 def _quote_identifier(identifier: str) -> str:
     return f"`{identifier.replace('`', '``')}`"
 
@@ -67,10 +112,7 @@ def _configured_iceberg_hive_catalog(spark: SparkSession) -> str | None:
 
 
 def _qualified_namespace(catalog: str, database: str) -> str:
-    return ".".join([
-        _quote_identifier(catalog),
-        _quote_identifier(database),
-    ])
+    return f"{_quote_identifier(catalog)}.{_quote_identifier(database)}"
 
 
 def _assert_namespace_exists(
@@ -107,27 +149,3 @@ def _assert_namespace_exists(
             f"Namespace {catalog}.{database} não foi criado ou não está visível "
             "no metastore Hive."
         )
-
-
-def _default_namespace_location(database: str) -> str:
-    return f"{get_hdfs_base_uri()}/user/hive/warehouse/{database}.db"
-
-
-def _ensure_table_namespace(
-    spark: SparkSession,
-    table_name: str,
-) -> None:
-    parts = table_name.split(".")
-
-    if len(parts) < 3:
-        return
-
-    catalog = parts[0]
-    database = parts[1]
-
-    create_namespace(
-        spark=spark,
-        catalog=catalog,
-        database=database,
-        location=_default_namespace_location(database),
-    )
