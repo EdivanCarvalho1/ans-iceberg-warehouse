@@ -1,13 +1,13 @@
 INSERT OVERWRITE spark_catalog.gold.dim_perfil_beneficiario
 WITH ranked_perfis AS (
     SELECT
-        SHA2(CONCAT_WS('||',
+        XXHASH64(CONCAT_WS('||',
             'dim_perfil_beneficiario',
             COALESCE(TRIM(CAST(tp_sexo AS STRING)), '__NULL__'),
             COALESCE(TRIM(CAST(de_faixa_etaria AS STRING)), '__NULL__'),
             COALESCE(TRIM(CAST(de_faixa_etaria_reaj AS STRING)), '__NULL__'),
             COALESCE(TRIM(CAST(tipo_vinculo AS STRING)), '__NULL__')
-        ), 256) AS sk_perfil_beneficiario,
+        )) AS sk_perfil_beneficiario,
         tp_sexo,
         de_faixa_etaria,
         de_faixa_etaria_reaj,

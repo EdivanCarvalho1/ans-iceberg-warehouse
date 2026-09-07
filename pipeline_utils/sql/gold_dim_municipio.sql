@@ -1,7 +1,7 @@
 INSERT OVERWRITE spark_catalog.gold.dim_municipio
 WITH ranked_municipios AS (
     SELECT
-        SHA2(CONCAT_WS('||', 'dim_municipio', COALESCE(TRIM(CAST(cd_municipio AS STRING)), '__NULL__')), 256) AS sk_municipio,
+        XXHASH64(CONCAT_WS('||', 'dim_municipio', COALESCE(TRIM(CAST(cd_municipio AS STRING)), '__NULL__'))) AS sk_municipio,
         cd_municipio,
         nm_municipio,
         sg_uf,

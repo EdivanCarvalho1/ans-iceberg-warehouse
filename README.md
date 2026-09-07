@@ -7,7 +7,7 @@ Projeto de pipeline de dados para ingestao e tratamento dos dados publicos de be
 - **Silver**: limpeza, validacao, deduplicacao e modelagem das entidades analiticas em tabelas Iceberg.
 - **Gold**: modelagem dimensional para consumo analitico e relatorios.
 
-O projeto foi criado para execucao em ambiente Big Data com Hadoop HDFS, Spark, Hive Metastore, Apache Iceberg e JupyterHub/JupyterLab.
+O projeto executa em ambiente Big Data com Hadoop HDFS, Spark, Hive Metastore, Apache Iceberg e JupyterHub/JupyterLab.
 
 ## Estrutura
 
@@ -131,7 +131,7 @@ A camada Gold organiza os movimentos de beneficiarios em uma tabela fato, `gold.
 Principais responsabilidades:
 
 - leitura das tabelas Silver materializadas;
-- criacao de chaves substitutas com `SHA2` em SQL;
+- criacao de chaves substitutas numericas com `XXHASH64` em SQL;
 - montagem das dimensoes e da fato com CTEs e `JOIN` SQL;
 - escrita atomica com `INSERT OVERWRITE`;
 - criacao de snapshots e tags Iceberg para cada tabela Gold.
@@ -153,7 +153,7 @@ Os notebooks usam Python somente para configurar a sessao, validar identificador
 
 ### SQL e rastreabilidade Iceberg
 
-Cada transformacao possui uma consulta SQL completa em `pipeline_utils/sql/`. Os notebooks nao montam fragmentos de consulta nem encadeiam operacoes como `select`, `where`, `join` ou `withColumn`; eles apenas carregam o SQL e o executam com `spark.sql`.
+Cada transformacao possui uma consulta SQL completa em `pipeline_utils/sql/`. Os notebooks nao montam fragmentos de consulta nem encadeiam operacoes como `select`, `where`, `join` ou `withColumn`; eles apenas carregam o SQL e o executam com `spark.sql`. As funcoes `XXHASH64`, `SHA2`, `ROW_NUMBER` e demais funcoes de transformacao sao nativas do Spark SQL.
 
 Os arquivos SQL sao organizados por camada:
 
@@ -161,7 +161,9 @@ Os arquivos SQL sao organizados por camada:
 - `silver_validated.sql`, `silver_operadora.sql`, `silver_municipio.sql`, `silver_plano.sql`, `silver_movimento.sql` e `silver_rejeitados.sql`: validacao e materializacao da Silver;
 - `gold_dim_operadora.sql`, `gold_dim_municipio.sql`, `gold_dim_plano.sql`, `gold_dim_perfil.sql` e `gold_fato_movimento.sql`: dimensoes e fato da Gold.
 
-As tabelas analiticas armazenam somente colunas de negocio e medidas. O estado de cada execucao fica no historico nativo do Iceberg: cada `INSERT OVERWRITE` gera um snapshot, e o notebook cria uma tag com o prefixo da camada (`ans_bronze_`, `ans_silver_` ou `ans_gold_`). O helper `tag_current_snapshot` consulta a tabela `snapshots` e associa a tag ao snapshot mais recente.
+As tabelas analiticas armazenam somente colunas de negocio e medidas. As `SKs` da Gold usam `XXHASH64` e sao armazenadas como `BIGINT` de 64 bits; o hash e deterministico e adequado para chaves tecnicas, mas nao e criptografico. Os hashes temporarios usados apenas para desempate permanecem em `SHA2(..., 256)` para reduzir colisao durante a deduplicacao.
+
+O estado de cada execucao fica no historico nativo do Iceberg: cada `INSERT OVERWRITE` gera um snapshot, e o notebook cria uma tag com o prefixo da camada (`ans_bronze_`, `ans_silver_` ou `ans_gold_`). O helper `tag_current_snapshot` consulta a tabela `snapshots` e associa a tag ao snapshot mais recente.
 
 Para relatórios reproduzíveis, `beneficiarios_reports.ipynb` exige `ICEBERG_GOLD_TAG` e consulta todas as tabelas Gold pela referência `tag_<ICEBERG_GOLD_TAG>`. Assim, as consultas usam um estado histórico consistente, sem depender de metadados gravados em cada linha.
 
@@ -291,7 +293,7 @@ PYTHONPATH=ans_ingestion:. python -m unittest discover -s pipeline_utils/tests
 
 ## Observacoes operacionais
 
-- A ingestao raw continua incremental por competencia; as camadas analiticas sao recomputadas integralmente a cada execucao.
+- A ingestao raw e incremental por competencia; as camadas analiticas sao recomputadas integralmente a cada execucao.
 - Cada `INSERT OVERWRITE` cria um novo snapshot Iceberg; as tags nomeiam o estado publicado de cada camada.
 - As tabelas Bronze, Silver e Gold nao armazenam `_batch_id`, `_source_path`, `_record_hash`, `_rejection_reason`, timestamps ou outras colunas operacionais.
 - Os relatorios devem receber uma tag Gold explicita para evitar mistura de estados entre tabelas.

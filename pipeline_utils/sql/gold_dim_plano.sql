@@ -1,11 +1,11 @@
 INSERT OVERWRITE spark_catalog.gold.dim_plano
 WITH ranked_planos AS (
     SELECT
-        SHA2(CONCAT_WS('||',
+        XXHASH64(CONCAT_WS('||',
             'dim_plano',
             COALESCE(TRIM(CAST(cd_operadora AS STRING)), '__NULL__'),
             COALESCE(TRIM(CAST(cd_plano AS STRING)), '__NULL__')
-        ), 256) AS sk_plano,
+        )) AS sk_plano,
         cd_operadora,
         cd_plano,
         tp_vigencia_plano,

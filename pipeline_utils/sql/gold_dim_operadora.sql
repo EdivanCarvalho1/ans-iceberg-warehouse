@@ -1,7 +1,7 @@
 INSERT OVERWRITE spark_catalog.gold.dim_operadora
 WITH ranked_operadoras AS (
     SELECT
-        SHA2(CONCAT_WS('||', 'dim_operadora', COALESCE(TRIM(CAST(cd_operadora AS STRING)), '__NULL__')), 256) AS sk_operadora,
+        XXHASH64(CONCAT_WS('||', 'dim_operadora', COALESCE(TRIM(CAST(cd_operadora AS STRING)), '__NULL__'))) AS sk_operadora,
         cd_operadora,
         nm_razao_social,
         nr_cnpj,

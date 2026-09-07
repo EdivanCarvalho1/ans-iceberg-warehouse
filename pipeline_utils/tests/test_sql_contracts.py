@@ -203,6 +203,25 @@ class SqlPipelineContractTests(unittest.TestCase):
         self.assertIn(".snapshots", catalog)
         self.assertIn("CREATE OR REPLACE TAG", catalog)
 
+    def test_surrogate_keys_use_native_64_bit_spark_hash(self) -> None:
+        dimension_sql = tuple(sorted(SQL_ROOT.glob("gold_dim_*.sql")))
+        for path in dimension_sql:
+            source = path.read_text(encoding="utf-8")
+            with self.subTest(path=path.name):
+                surrogate_key_expression = source.lower().split(" as sk_", 1)[0]
+                self.assertIn("xxhash64(", surrogate_key_expression)
+                self.assertNotIn("sha2(", surrogate_key_expression)
+
+        gold_notebook = notebook_source(NOTEBOOKS[2])
+        for column in (
+            "sk_operadora",
+            "sk_municipio",
+            "sk_plano",
+            "sk_perfil_beneficiario",
+        ):
+            with self.subTest(column=column):
+                self.assertIn(f"{column} BIGINT", gold_notebook)
+
     def test_removed_dataframe_helpers_are_not_production_modules(self) -> None:
         for filename in (
             "dataframe_io.py",
