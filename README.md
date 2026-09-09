@@ -13,57 +13,9 @@ As camadas Bronze, Silver e Gold são materializadas como tabelas **Apache Icebe
 
 ## Arquitetura do projeto
 
-```mermaid
-flowchart LR
-    subgraph SOURCE["Fonte pública"]
-        ANS["Portal de Dados Abertos ANS<br/>diretórios YYYYMM + arquivos ZIP"]
-    end
+![Arquitetura do ANS Iceberg Warehouse](img/architecture.drawio.svg)
 
-    subgraph INGESTION["Ingestão Python — ans_ingestion"]
-        LIST["Listagem e filtros<br/>competência mais recente"]
-        DOWNLOAD["Download local<br/>validação do ZIP + extração"]
-        STAGING["WebHDFS<br/>staging + publicação controlada"]
-    end
-
-    subgraph RAWZONE["Raw zone — HDFS"]
-        RAW["/dados/raw/ans/YYYYMM/<br/>CSVs publicados por competência"]
-    end
-
-    subgraph PROCESSING["Processamento — Spark SQL"]
-        BRONZE["Bronze<br/>bronze.beneficiarios<br/>INSERT OVERWRITE"]
-        VALIDATE["Silver staging lógico<br/>limpeza + tipagem + validação<br/>vw_silver_validated"]
-        SILVER["Silver<br/>operadora · municipio · plano<br/>beneficiario_movimento"]
-        REJECTED["Silver rejeitados<br/>beneficiario_rejeitado"]
-        GOLD["Gold — esquema estrela<br/>4 dimensões + 1 fato"]
-    end
-
-    REPORTS["beneficiarios_reports.ipynb<br/>Spark SQL sobre uma tag Gold"]
-
-    subgraph PLATFORM["Persistência e metadados"]
-        HDFS["HDFS warehouse<br/>bronze.db · silver.db · gold.db"]
-        HMS["Hive Metastore<br/>catálogo e namespaces"]
-        ICEBERG["Apache Iceberg v2<br/>snapshots + tags por execução"]
-    end
-
-    ANS --> LIST --> DOWNLOAD --> STAGING --> RAW
-    RAW --> BRONZE --> VALIDATE
-    VALIDATE --> SILVER
-    VALIDATE --> REJECTED
-    SILVER --> GOLD --> REPORTS
-
-    BRONZE -. tabelas .-> HDFS
-    SILVER -. tabelas .-> HDFS
-    REJECTED -. tabela .-> HDFS
-    GOLD -. tabelas .-> HDFS
-
-    HMS -. catálogo .-> BRONZE
-    HMS -. catálogo .-> SILVER
-    HMS -. catálogo .-> GOLD
-
-    ICEBERG -. snapshot/tag .-> BRONZE
-    ICEBERG -. snapshot/tag .-> SILVER
-    ICEBERG -. snapshot/tag .-> GOLD
-```
+[Arquivo editável no draw.io](img/architecture.drawio)
 
 ### Fluxo resumido
 
@@ -116,6 +68,8 @@ beneficiarios_reports.ipynb
 .
 ├── ans_ingestion/                 # Pipeline Python: ANS -> HDFS raw
 ├── img/
+│   ├── architecture.drawio
+│   ├── architecture.drawio.svg
 │   ├── bronze-beneficiarios.drawio
 │   ├── bronze-beneficiarios.drawio.svg
 │   ├── silver-ans.drawio
