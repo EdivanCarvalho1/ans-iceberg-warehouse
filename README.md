@@ -1,197 +1,326 @@
-# Beneficiarios ANS
+# Beneficiários ANS — Iceberg Warehouse
 
-Projeto de pipeline de dados para ingestao e tratamento dos dados publicos de beneficiarios da ANS, com organizacao em camadas de Data Lake:
+Pipeline e Data Warehouse para ingestão e tratamento dos dados públicos de beneficiários da ANS, construído com **Python**, **Hadoop HDFS**, **Apache Spark**, **Spark SQL**, **Apache Iceberg** e **Hive Metastore**.
 
-- **Raw**: arquivos extraidos da ANS publicados no HDFS.
-- **Bronze**: leitura dos CSVs crus e carga completa em tabela Iceberg.
-- **Silver**: limpeza, validacao, deduplicacao e modelagem das entidades analiticas em tabelas Iceberg.
-- **Gold**: modelagem dimensional para consumo analitico e relatorios.
+O projeto segue uma arquitetura Medallion:
 
-O projeto executa em ambiente Big Data com Hadoop HDFS, Spark, Hive Metastore, Apache Iceberg e JupyterHub/JupyterLab.
+- **Raw**: arquivos extraídos da ANS e publicados no HDFS por competência.
+- **Bronze**: cópia estruturada dos CSVs em uma tabela Iceberg, mantendo os campos de negócio como `STRING`.
+- **Silver**: limpeza, tipagem, validação, deduplicação, separação de entidades e registros rejeitados.
+- **Gold**: Data Warehouse dimensional em esquema estrela para consultas e relatórios.
 
-## Estrutura
+As camadas Bronze, Silver e Gold são materializadas como tabelas **Apache Iceberg v2** registradas no **Hive Metastore** e armazenadas no **HDFS**. O histórico técnico das execuções é mantido por **snapshots e tags do Iceberg**, sem adicionar colunas operacionais às linhas das tabelas.
 
-```text
-.
-├── ans_ingestion/              # Pipeline Python de ingestao da ANS para HDFS raw
-├── img/                        # Diagramas e imagens da documentacao
-├── pipeline_utils/             # Catalogo Iceberg, configuracao e SQL dos pipelines
-│   ├── sql/                    # Consultas SQL completas executadas pelos notebooks
-│   └── tests/                  # Contratos estaticos dos pipelines SQL
-├── load_bronze_layer.ipynb     # Notebook de carga da camada Bronze
-├── load_silver_layer.ipynb     # Notebook de carga da camada Silver
-├── load_gold_layer.ipynb       # Notebook de carga da camada Gold
-├── beneficiarios_reports.ipynb # Consultas Spark SQL de relatorios da camada Gold
-├── utils.py                    # Barrel module para importar utilitarios nos notebooks
-└── README.md
+## Arquitetura do projeto
+
+```mermaid
+flowchart LR
+    subgraph SOURCE["Fonte pública"]
+        ANS["Portal de Dados Abertos ANS<br/>diretórios YYYYMM + arquivos ZIP"]
+    end
+
+    subgraph INGESTION["Ingestão Python — ans_ingestion"]
+        LIST["Listagem e filtros<br/>competência mais recente"]
+        DOWNLOAD["Download local<br/>validação do ZIP + extração"]
+        STAGING["WebHDFS<br/>staging + publicação controlada"]
+    end
+
+    subgraph RAWZONE["Raw zone — HDFS"]
+        RAW["/dados/raw/ans/YYYYMM/<br/>CSVs publicados por competência"]
+    end
+
+    subgraph PROCESSING["Processamento — Spark SQL"]
+        BRONZE["Bronze<br/>bronze.beneficiarios<br/>INSERT OVERWRITE"]
+        VALIDATE["Silver staging lógico<br/>limpeza + tipagem + validação<br/>vw_silver_validated"]
+        SILVER["Silver<br/>operadora · municipio · plano<br/>beneficiario_movimento"]
+        REJECTED["Silver rejeitados<br/>beneficiario_rejeitado"]
+        GOLD["Gold — esquema estrela<br/>4 dimensões + 1 fato"]
+    end
+
+    REPORTS["beneficiarios_reports.ipynb<br/>Spark SQL sobre uma tag Gold"]
+
+    subgraph PLATFORM["Persistência e metadados"]
+        HDFS["HDFS warehouse<br/>bronze.db · silver.db · gold.db"]
+        HMS["Hive Metastore<br/>catálogo e namespaces"]
+        ICEBERG["Apache Iceberg v2<br/>snapshots + tags por execução"]
+    end
+
+    ANS --> LIST --> DOWNLOAD --> STAGING --> RAW
+    RAW --> BRONZE --> VALIDATE
+    VALIDATE --> SILVER
+    VALIDATE --> REJECTED
+    SILVER --> GOLD --> REPORTS
+
+    BRONZE -. tabelas .-> HDFS
+    SILVER -. tabelas .-> HDFS
+    REJECTED -. tabela .-> HDFS
+    GOLD -. tabelas .-> HDFS
+
+    HMS -. catálogo .-> BRONZE
+    HMS -. catálogo .-> SILVER
+    HMS -. catálogo .-> GOLD
+
+    ICEBERG -. snapshot/tag .-> BRONZE
+    ICEBERG -. snapshot/tag .-> SILVER
+    ICEBERG -. snapshot/tag .-> GOLD
 ```
 
-## Fluxo de dados
+### Fluxo resumido
 
 ```text
-Portal de Dados Abertos ANS
-        |
-        v
+Portal ANS
+   ↓
 ans_ingestion
-        |
-        v
+   ↓
 HDFS raw: /dados/raw/ans/YYYYMM/
-        |
-        v
-load_bronze_layer.ipynb
-        |
-        v
+   ↓
+load_bronze_layer.ipynb + bronze_insert.sql
+   ↓
 Iceberg: bronze.beneficiarios
-         (snapshot/tag da execucao)
-        |
-        v
-load_silver_layer.ipynb
-        |
-        v
-Iceberg: silver.operadora
-         silver.municipio
-         silver.plano
-         silver.beneficiario_movimento
-         silver.beneficiario_rejeitado
-         (snapshot/tag de cada tabela)
-        |
-        v
-load_gold_layer.ipynb
-        |
-        v
-Iceberg: gold.dim_operadora
-         gold.dim_municipio
-         gold.dim_plano
-         gold.dim_perfil_beneficiario
-         gold.fato_beneficiario_movimento
-         (snapshot/tag de cada tabela)
-        |
-        v
+   ↓
+load_silver_layer.ipynb + silver_*.sql
+   ├── silver.operadora
+   ├── silver.municipio
+   ├── silver.plano
+   ├── silver.beneficiario_movimento
+   └── silver.beneficiario_rejeitado
+   ↓
+load_gold_layer.ipynb + gold_*.sql
+   ├── gold.dim_operadora
+   ├── gold.dim_municipio
+   ├── gold.dim_plano
+   ├── gold.dim_perfil_beneficiario
+   └── gold.fato_beneficiario_movimento
+   ↓
 beneficiarios_reports.ipynb
 ```
 
-## Componentes principais
+### Decisões arquiteturais
 
-### `ans_ingestion/`
+| Aspecto | Implementação atual |
+|---|---|
+| Ingestão Raw | Incremental por competência; a competência já publicada é ignorada. |
+| Publicação Raw | Staging no HDFS e troca controlada para o destino final, com backup/rollback temporário. |
+| Transformações | SQL completo executado por `spark.sql`; Python configura e orquestra os notebooks. |
+| Bronze | Carga completa com `INSERT OVERWRITE`; campos de negócio permanecem `STRING`. |
+| Silver | Limpeza, tipagem, validação, rejeição e deduplicação determinística com `ROW_NUMBER()`. |
+| Gold | Esquema estrela com quatro dimensões e uma fato; surrogate keys `BIGINT` com `XXHASH64`. |
+| Persistência | Tabelas Apache Iceberg v2 no HDFS. |
+| Catálogo | Hive Metastore por meio do catálogo Spark/Iceberg. |
+| Histórico técnico | Snapshots e tags `ans_bronze_*`, `ans_silver_*` e `ans_gold_*`. |
+| Relatórios | Leitura de uma tag Gold explícita para manter consistência entre fato e dimensões. |
 
-Pipeline Python responsavel por:
+## Estrutura do repositório
 
-- listar as competencias disponiveis no diretorio publico da ANS;
-- selecionar a competencia mais recente dentro dos filtros configurados;
-- baixar arquivos ZIP validos;
-- validar os caminhos internos dos ZIPs;
-- extrair os arquivos localmente;
-- publicar os dados no HDFS usando area de staging;
-- evitar reprocessamento de competencias ja publicadas.
+```text
+.
+├── ans_ingestion/                 # Pipeline Python: ANS -> HDFS raw
+├── img/
+│   ├── bronze-beneficiarios.drawio
+│   ├── bronze-beneficiarios.drawio.svg
+│   ├── silver-ans.drawio
+│   ├── silver-ans.drawio.svg
+│   ├── gold-ans.drawio
+│   └── gold-ans.drawio.svg
+├── pipeline_utils/
+│   ├── iceberg_catalog.py         # Namespaces, validação de schema e tags Iceberg
+│   ├── pipeline_config.py         # Configuração HDFS/Spark
+│   ├── constants.py
+│   ├── sql/                       # Transformações SQL completas
+│   └── tests/                     # Contratos estáticos dos pipelines SQL
+├── load_bronze_layer.ipynb        # Raw -> Bronze
+├── load_silver_layer.ipynb        # Bronze -> Silver
+├── load_gold_layer.ipynb          # Silver -> Gold
+├── beneficiarios_reports.ipynb    # Relatórios sobre a Gold versionada
+├── utils.py
+└── README.md
+```
 
-Veja a documentacao detalhada em [`ans_ingestion/README.md`](ans_ingestion/README.md).
+Os arquivos `.drawio` são as fontes editáveis dos modelos; os `.svg` são as versões renderizadas usadas neste README.
 
-### `load_bronze_layer.ipynb`
+## Camada Raw — `ans_ingestion/`
 
-Notebook Spark que le os arquivos da camada raw e grava a tabela `bronze.beneficiarios` em Iceberg.
+O pacote `ans_ingestion` executa a ingestão dos dados públicos antes de qualquer transformação Spark. Ele lista as competências no portal da ANS, seleciona a mais recente, filtra os ZIPs válidos, baixa e valida os arquivos, extrai os CSVs e publica a competência no HDFS via WebHDFS.
 
-![Modelo da tabela bronze.beneficiarios](img/bronze-beneficiarios.drawio.png)
+A publicação usa uma pasta de staging e só substitui o destino final após a carga completa. Se já existir um destino, ele é movido temporariamente para backup e restaurado caso a troca falhe.
 
-A camada Bronze mantem os dados proximos ao formato original recebido da ANS. As colunas de negocio sao gravadas como `STRING`, evitando perda de informacao por inferencia automatica de tipos na primeira etapa do pipeline. O notebook cria uma view CSV via SQL e executa a consulta completa em `pipeline_utils/sql/bronze_insert.sql` com `spark.sql`.
+Destino final:
 
-Principais responsabilidades:
+```text
+/dados/raw/ans/YYYYMM/
+```
 
-- leitura recursiva dos CSVs em `HDFS_BASE_URI/dados/raw/ans/`;
-- leitura dos arquivos publicados por uma view CSV criada com SQL;
-- cast explicito das colunas de negocio para `STRING`;
-- recomputacao completa com `INSERT OVERWRITE`;
-- criacao de um snapshot Iceberg e de uma tag da execucao.
+A documentação detalhada está em [`ans_ingestion/README.md`](ans_ingestion/README.md).
 
-### `load_silver_layer.ipynb`
+## Camada Bronze
 
-Notebook Spark que transforma a Bronze em tabelas Silver.
+`load_bronze_layer.ipynb` lê recursivamente os CSVs da Raw, cria uma view temporária CSV e materializa `spark_catalog.bronze.beneficiarios` em Iceberg.
 
-![Modelo das tabelas Silver ANS](img/silver-ans.drawio.png)
+![Modelo da tabela bronze.beneficiarios](img/bronze-beneficiarios.drawio.svg)
 
-A camada Silver separa a tabela Bronze em entidades mais limpas e reutilizaveis. `silver.beneficiario_movimento` preserva a granularidade do movimento por competencia e se relaciona com as tabelas de referencia `silver.operadora`, `silver.plano` e `silver.municipio`. Toda a limpeza, tipagem, validacao e deduplicacao esta escrita em SQL completo nos arquivos `pipeline_utils/sql/silver_*.sql`.
+[Arquivo editável no draw.io](img/bronze-beneficiarios.drawio)
 
-Principais responsabilidades:
+A tabela contém somente os **22 campos de negócio** do pipeline atual. Todos são persistidos como `STRING`, inclusive as três quantidades e `dt_carga`.
 
-- leitura da tabela `bronze.beneficiarios`;
-- leitura do estado atual da Bronze;
-- limpeza de strings, datas, codigos e identificadores com CTEs SQL;
-- validacao das regras de negocio e separacao dos registros rejeitados;
-- deduplicacao deterministica com `ROW_NUMBER()`;
-- recomputacao completa das tabelas com `INSERT OVERWRITE`;
-- criacao de snapshots e tags Iceberg para cada tabela Silver.
+Não existem mais colunas técnicas como `_batch_id`, `_source_path`, `_source_system`, `_ingested_at`, `_layer` ou `_record_hash`.
 
-### `load_gold_layer.ipynb`
+A materialização usa `pipeline_utils/sql/bronze_insert.sql` e `INSERT OVERWRITE`. Ao final da execução é criada uma tag:
 
-Notebook Spark que transforma a Silver em um modelo dimensional Gold para analises e relatorios.
+```text
+ans_bronze_YYYYMMDDHHMMSS_<uuid>
+```
 
-![Modelo das tabelas Gold ANS](img/gold-ans.drawio.png)
+## Camada Silver
 
-A camada Gold organiza os movimentos de beneficiarios em uma tabela fato, `gold.fato_beneficiario_movimento`, ligada as dimensoes `gold.dim_operadora`, `gold.dim_municipio`, `gold.dim_plano` e `gold.dim_perfil_beneficiario`. Esse modelo facilita consultas por competencia, operadora, municipio, UF, plano, sexo, faixa etaria e tipo de vinculo. As chaves substitutas sao calculadas dentro do SQL; nao ha colunas tecnicas de carga nas tabelas.
+`load_silver_layer.ipynb` transforma a Bronze em cinco tabelas Iceberg.
 
-Principais responsabilidades:
+![Modelo das tabelas Silver ANS](img/silver-ans.drawio.svg)
 
-- leitura das tabelas Silver materializadas;
-- criacao de chaves substitutas numericas com `XXHASH64` em SQL;
-- montagem das dimensoes e da fato com CTEs e `JOIN` SQL;
-- escrita atomica com `INSERT OVERWRITE`;
-- criacao de snapshots e tags Iceberg para cada tabela Gold.
+[Arquivo editável no draw.io](img/silver-ans.drawio)
 
-### `beneficiarios_reports.ipynb`
+```text
+silver.operadora
+silver.municipio
+silver.plano
+silver.beneficiario_movimento
+silver.beneficiario_rejeitado
+```
 
-Notebook Spark SQL com consultas de relatorio sobre a modelagem Gold, incluindo visoes por competencia, UF, operadora, perfil de beneficiario, tipo de vinculo, plano e municipio. As consultas usam diretamente as referencias `tag_<ICEBERG_GOLD_TAG>` das tabelas Gold, garantindo que todos os relatorios leiam o mesmo estado historico.
+`silver_validated.sql` cria `vw_silver_validated` e concentra a limpeza e validação: normalização de nulos, limpeza de códigos, padronização textual, validação de UF/sexo/CNPJ/competência, conversão das medidas para `BIGINT` e de `dt_carga` para `DATE`.
 
-### `pipeline_utils/`
+O grão lógico de `silver.beneficiario_movimento` é:
 
-Pacote de apoio usado pelos notebooks:
+```text
+id_cmpt_movel
++ cd_operadora
++ cd_municipio
++ cd_plano
++ tp_sexo
++ de_faixa_etaria
++ de_faixa_etaria_reaj
++ tipo_vinculo
+```
 
-- `sql/`: uma consulta completa por etapa de transformacao, sem builders ou fragmentos SQL em Python;
-- `iceberg_catalog.py`: criacao de namespaces, validacao de schemas e tags de snapshots;
-- `pipeline_config.py`: leitura de configuracoes de ambiente;
-- `constants.py`: constantes de configuracao compartilhadas.
+A deduplicação usa `ROW_NUMBER()` nesse grão, ordenando por `dt_carga DESC` e por um `business_row_hash` `SHA2-256` apenas como desempate. O hash é temporário e **não é persistido** na Silver.
 
-Os notebooks usam Python somente para configurar a sessao, validar identificadores/campos, ler os arquivos SQL e executar `spark.sql`. Transformacoes de dados nao usam a API de DataFrames.
+`silver.plano` usa a chave natural composta `cd_operadora + cd_plano`. Os registros inválidos são direcionados para `silver.beneficiario_rejeitado`.
 
-### SQL e rastreabilidade Iceberg
+As cinco tabelas são recompostas com `INSERT OVERWRITE` e recebem uma tag comum:
 
-Cada transformacao possui uma consulta SQL completa em `pipeline_utils/sql/`. Os notebooks nao montam fragmentos de consulta nem encadeiam operacoes como `select`, `where`, `join` ou `withColumn`; eles apenas carregam o SQL e o executam com `spark.sql`. As funcoes `XXHASH64`, `SHA2`, `ROW_NUMBER` e demais funcoes de transformacao sao nativas do Spark SQL.
+```text
+ans_silver_YYYYMMDDHHMMSS_<uuid>
+```
 
-Os arquivos SQL sao organizados por camada:
+## Camada Gold
 
-- `bronze_insert.sql`: carga completa da Bronze;
-- `silver_validated.sql`, `silver_operadora.sql`, `silver_municipio.sql`, `silver_plano.sql`, `silver_movimento.sql` e `silver_rejeitados.sql`: validacao e materializacao da Silver;
-- `gold_dim_operadora.sql`, `gold_dim_municipio.sql`, `gold_dim_plano.sql`, `gold_dim_perfil.sql` e `gold_fato_movimento.sql`: dimensoes e fato da Gold.
+`load_gold_layer.ipynb` transforma a Silver em um esquema estrela.
 
-As tabelas analiticas armazenam somente colunas de negocio e medidas. As `SKs` da Gold usam `XXHASH64` e sao armazenadas como `BIGINT` de 64 bits; o hash e deterministico e adequado para chaves tecnicas, mas nao e criptografico. Os hashes temporarios usados apenas para desempate permanecem em `SHA2(..., 256)` para reduzir colisao durante a deduplicacao.
+![Modelo dimensional Gold ANS](img/gold-ans.drawio.svg)
 
-O estado de cada execucao fica no historico nativo do Iceberg: cada `INSERT OVERWRITE` gera um snapshot, e o notebook cria uma tag com o prefixo da camada (`ans_bronze_`, `ans_silver_` ou `ans_gold_`). O helper `tag_current_snapshot` consulta a tabela `snapshots` e associa a tag ao snapshot mais recente.
+[Arquivo editável no draw.io](img/gold-ans.drawio)
 
-Para relatórios reproduzíveis, `beneficiarios_reports.ipynb` exige `ICEBERG_GOLD_TAG` e consulta todas as tabelas Gold pela referência `tag_<ICEBERG_GOLD_TAG>`. Assim, as consultas usam um estado histórico consistente, sem depender de metadados gravados em cada linha.
+Dimensões:
+
+```text
+gold.dim_operadora
+gold.dim_municipio
+gold.dim_plano
+gold.dim_perfil_beneficiario
+```
+
+Fato:
+
+```text
+gold.fato_beneficiario_movimento
+```
+
+As surrogate keys `sk_operadora`, `sk_municipio`, `sk_plano` e `sk_perfil_beneficiario` são `BIGINT` determinísticos gerados com `XXHASH64` a partir das chaves naturais.
+
+A fato contém a competência, quatro surrogate keys e as medidas:
+
+```text
+qt_beneficiario_ativo
+qt_beneficiario_aderido
+qt_beneficiario_cancelado
+```
+
+Ela é particionada por `id_cmpt_movel`.
+
+Os hashes `SHA2-256` usados nos SQLs Gold servem somente para desempate determinístico e não fazem parte do schema final. Todas as tabelas Gold são materializadas com `INSERT OVERWRITE` e recebem a mesma tag da execução:
+
+```text
+ans_gold_YYYYMMDDHHMMSS_<uuid>
+```
+
+## SQL-first
+
+As transformações ficam em consultas SQL completas dentro de `pipeline_utils/sql/`:
+
+```text
+bronze_insert.sql
+
+silver_validated.sql
+silver_operadora.sql
+silver_municipio.sql
+silver_plano.sql
+silver_movimento.sql
+silver_rejeitados.sql
+
+gold_dim_operadora.sql
+gold_dim_municipio.sql
+gold_dim_plano.sql
+gold_dim_perfil.sql
+gold_fato_movimento.sql
+```
+
+Os notebooks usam Python somente para configuração da sessão, caminhos, criação de namespaces, validação de colunas, leitura dos arquivos SQL, execução via `spark.sql` e criação das tags Iceberg.
+
+## Apache Iceberg, Hive Metastore e HDFS
+
+Os namespaces são criados em:
+
+```text
+${HDFS_BASE_URI}/user/hive/warehouse/bronze.db
+${HDFS_BASE_URI}/user/hive/warehouse/silver.db
+${HDFS_BASE_URI}/user/hive/warehouse/gold.db
+```
+
+As tabelas usam Iceberg `format-version=2`. Cada `INSERT OVERWRITE` cria um snapshot; `tag_current_snapshot` lê a metadata table `<tabela>.snapshots` e associa uma tag ao snapshot mais recente.
+
+O histórico de execução fica, portanto, nos metadados nativos do Iceberg, em vez de ser repetido em cada linha das tabelas.
+
+## Relatórios reproduzíveis
+
+`beneficiarios_reports.ipynb` consulta o modelo Gold por uma tag explícita:
+
+```bash
+export ICEBERG_GOLD_TAG=ans_gold_YYYYMMDDHHMMSS_UUID
+```
+
+A mesma tag é aplicada à fato e às quatro dimensões, evitando misturar estados de execuções diferentes.
+
+Os relatórios atuais incluem análises por competência, UF, operadora, sexo/faixa etária, tipo de vínculo, evolução temporal, plano e município.
 
 ## Requisitos
 
 - Python 3.12+
 - Hadoop HDFS
 - WebHDFS habilitado
-- Apache Spark com suporte a Iceberg
+- Apache Spark com suporte a Apache Iceberg
 - Hive Metastore
-- JupyterLab/JupyterHub para execucao dos notebooks
-- Dependencias Python de `ans_ingestion/requirements.txt`
-
-Instale as dependencias da ingestao:
+- JupyterLab/JupyterHub
+- dependências de `ans_ingestion/requirements.txt`
 
 ```bash
 pip install -r ans_ingestion/requirements.txt
 ```
 
-## Configuracao
-
-As principais variaveis de ambiente sao:
+## Configuração
 
 ```bash
 export HDFS_BASE_URI=hdfs://localhost:9000
 export HDFS_WEB_URL=http://localhost:9870
 export HDFS_USER=edivan
-export ICEBERG_GOLD_TAG=ans_gold_YYYYMMDDHHMMSS_UUID
 
 export ANS_SOURCE_URL=https://dadosabertos.ans.gov.br/FTP/PDA/informacoes_consolidadas_de_beneficiarios-024/
 export ANS_SOURCE_START_PERIOD=
@@ -202,100 +331,43 @@ export ANS_REQUEST_TIMEOUT_SECONDS=60
 export ANS_DOWNLOAD_RETRIES=3
 export ANS_DOWNLOAD_RETRY_BACKOFF_SECONDS=5
 export LOG_LEVEL=INFO
+
+# Necessária para o notebook de relatórios
+export ICEBERG_GOLD_TAG=ans_gold_YYYYMMDDHHMMSS_UUID
 ```
 
 Existe um exemplo em [`ans_ingestion/.env.example`](ans_ingestion/.env.example).
 
-## Execucao
-
-### 1. Ingerir dados crus para o HDFS
-
-Na raiz do projeto:
+## Execução
 
 ```bash
+# 1. Raw
 python -m ans_ingestion.main
 ```
 
-A carga publica os arquivos em:
+Depois, execute em ordem:
 
 ```text
-/dados/raw/ans/YYYYMM/
-```
-
-### 2. Carregar a camada Bronze
-
-Abra e execute:
-
-```text
-load_bronze_layer.ipynb
-```
-
-Resultado esperado:
-
-```text
-bronze.beneficiarios
-```
-
-### 3. Carregar a camada Silver
-
-Abra e execute:
-
-```text
-load_silver_layer.ipynb
-```
-
-Resultados esperados:
-
-```text
-silver.operadora
-silver.municipio
-silver.plano
-silver.beneficiario_movimento
-silver.beneficiario_rejeitado
-```
-
-### 4. Carregar a camada Gold
-
-Abra e execute:
-
-```text
-load_gold_layer.ipynb
-```
-
-Resultados esperados:
-
-```text
-gold.dim_operadora
-gold.dim_municipio
-gold.dim_plano
-gold.dim_perfil_beneficiario
-gold.fato_beneficiario_movimento
-```
-
-### 5. Executar relatorios
-
-Defina `ICEBERG_GOLD_TAG` com a tag criada pelo `load_gold_layer.ipynb` antes de executar o notebook. A tag deve existir em todas as cinco tabelas Gold.
-
-Abra e execute:
-
-```text
-beneficiarios_reports.ipynb
+2. load_bronze_layer.ipynb
+3. load_silver_layer.ipynb
+4. load_gold_layer.ipynb
+5. beneficiarios_reports.ipynb
 ```
 
 ## Testes
-
-A suite de testes cobre a ingestao e os contratos estaticos dos pipelines SQL:
 
 ```bash
 PYTHONPATH=ans_ingestion:. python -m unittest discover -s ans_ingestion/tests
 PYTHONPATH=ans_ingestion:. python -m unittest discover -s pipeline_utils/tests
 ```
 
-## Observacoes operacionais
+## Observações operacionais
 
-- A ingestao raw e incremental por competencia; as camadas analiticas sao recomputadas integralmente a cada execucao.
-- Cada `INSERT OVERWRITE` cria um novo snapshot Iceberg; as tags nomeiam o estado publicado de cada camada.
-- As tabelas Bronze, Silver e Gold nao armazenam `_batch_id`, `_source_path`, `_record_hash`, `_rejection_reason`, timestamps ou outras colunas operacionais.
-- Os relatorios devem receber uma tag Gold explicita para evitar mistura de estados entre tabelas.
-- Configure `HDFS_BASE_URI` antes de executar os notebooks, pois os caminhos de warehouse, raw e checkpoint dependem dele.
-- Tags e snapshots precisam de uma politica de retencao que preserve os estados usados para auditoria e relatorios historicos.
+- A Raw é incremental por competência; Bronze, Silver e Gold são recomputadas integralmente.
+- A publicação Raw usa staging para evitar disponibilizar competências parcialmente carregadas.
+- As tabelas analíticas armazenam somente colunas do modelo; metadados técnicos ficam no histórico do Iceberg.
+- `business_row_hash` e `fact_row_hash` são artefatos temporários de transformação.
+- As surrogate keys Gold são `BIGINT` geradas por `XXHASH64`; não são hashes criptográficos.
+- A fato Gold é particionada por `id_cmpt_movel`.
+- Relatórios históricos devem usar uma tag Gold explícita.
+- Tags e snapshots devem ter uma política de retenção compatível com auditoria e reprodutibilidade.
